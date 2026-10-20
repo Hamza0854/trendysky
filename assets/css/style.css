@@ -659,10 +659,11 @@ img.is-missing { opacity: 0; }
 .ftr__col ul { list-style: none; padding: 0 0 16px; margin: 0; display: grid; gap: 10px; font-size: .92rem; }
 .ftr__col a:hover, .ftr__brand a:hover { color: var(--gold-3); }
 .ftr__word {
+  font-family: "Sail", system-ui !important;
   font: italic 400 19vw/1 var(--f-d); letter-spacing: -.04em; text-align: center; white-space: nowrap;
   margin: 34px 0 6px; padding: 0 .1em .16em; background: var(--grad-gold); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-@media (min-width: 1440px) { .ftr__word { font-size: 15rem; } }
+@media (min-width: 1440px) { .ftr__word { font-size: 10rem; } }
 .ftr__bottom { display: grid; gap: 14px; padding: 20px 0 28px; border-top: 1px solid var(--line); font-size: .78rem; color: var(--muted); }
 @media (min-width: 992px) { .ftr__bottom { grid-template-columns: auto 1fr auto; align-items: center; gap: 24px; } .ftr__bottom p { text-align: center; } }
 .ftr__bottom p { margin: 0; }
