@@ -868,3 +868,269 @@
     }
   });
 })();
+
+
+
+/* =====================================================================
+   TRENDY SKY — Collection / shop page (shop.html)
+   Filters work on the product cards in the HTML (their data-* attributes),
+   so your backend only needs to print the cards. URL keeps the filters:
+   shop.html?cat=scrub-wears&size=M&min=100&max=300&offer=sale&sort=price-asc
+   ===================================================================== */
+(() => {
+  "use strict";
+  const page = document.querySelector("[data-shop]");
+  if (!page) return;
+
+  const $ = (s, c = document) => c.querySelector(s);
+  const $$ = (s, c = document) => [...c.querySelectorAll(s)];
+  const PER_PAGE = 9;
+  const GROUPS = ["cat", "stock", "size", "color", "for", "offer"];
+  const LABELS = {
+    stock: { in: "In stock", out: "Out of stock" },
+    offer: { sale: "On sale", new: "New arrivals" },
+    for: { women: "Women", men: "Men", unisex: "Unisex" }
+  };
+
+  const grid = $("[data-shop-grid]");
+  const form = $("[data-filters]");
+  const promoTile = $("[data-grid-promo]");
+  const items = $$(".pc", grid).map((el, i) => ({
+    el, i,
+    name: el.dataset.name || "",
+    cat: el.dataset.cat,
+    price: +el.dataset.price,
+    sizes: (el.dataset.sizes || "").split(" ").filter(Boolean),
+    colors: (el.dataset.colors || "").split(" ").filter(Boolean),
+    stock: el.dataset.stock,
+    for: el.dataset.for,
+    sale: el.dataset.sale === "1",
+    isNew: el.dataset.new === "1",
+    pop: +el.dataset.pop || 999,
+    date: el.dataset.date || "",
+    text: (el.dataset.name + " " + el.dataset.cat.replace(/-/g, " ") + " " + el.dataset.colors).toLowerCase()
+  }));
+
+  /* ---- price range ---- */
+  const priceBox = $("[data-price]");
+  const PMIN = 0, PMAX = +priceBox.dataset.max;
+  const rMin = $("[data-pmin]", priceBox), rMax = $("[data-pmax]", priceBox);
+  const nMin = $("[data-pmin-n]", priceBox), nMax = $("[data-pmax-n]", priceBox);
+  const fill = $(".price__fill", priceBox);
+
+  /* ---- state ---- */
+  const state = { sort: "featured", min: PMIN, max: PMAX, q: "", shown: PER_PAGE, cols: null };
+  GROUPS.forEach(g => (state[g] = new Set()));
+
+  const readURL = () => {
+    const u = new URLSearchParams(location.search);
+    GROUPS.forEach(g => { state[g] = new Set((u.get(g) || "").split(",").filter(Boolean)); });
+    if (u.get("sale") === "1") state.offer.add("sale"); // old links from the home page
+    state.min = Math.max(PMIN, +u.get("min") || PMIN);
+    state.max = Math.min(PMAX, u.has("max") ? +u.get("max") : PMAX);
+    state.sort = u.get("sort") || "featured";
+    state.q = (u.get("q") || "").trim();
+  };
+  const writeURL = () => {
+    const u = new URLSearchParams();
+    if (state.q) u.set("q", state.q);
+    GROUPS.forEach(g => { if (state[g].size) u.set(g, [...state[g]].join(",")); });
+    if (state.min > PMIN) u.set("min", state.min);
+    if (state.max < PMAX) u.set("max", state.max);
+    if (state.sort !== "featured") u.set("sort", state.sort);
+    const qs = u.toString().replace(/%2C/g, ",");
+    history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+  };
+
+  /* ---- matching (skip one group to calculate counts for that group) ---- */
+  const matches = (it, skip) => {
+    if (state.q && !state.q.toLowerCase().split(/\s+/).every(w => it.text.includes(w))) return false;
+    if (skip !== "price" && (it.price < state.min || it.price > state.max)) return false;
+    for (const g of GROUPS) {
+      if (g === skip || !state[g].size) continue;
+      const set = state[g];
+      if (g === "cat" && !set.has(it.cat)) return false;
+      if (g === "stock" && !set.has(it.stock)) return false;
+      if (g === "for" && !set.has(it.for)) return false;
+      if (g === "size" && !it.sizes.some(s => set.has(s))) return false;
+      if (g === "color" && !it.colors.some(c => set.has(c))) return false;
+      if (g === "offer" && ![...set].every(o => (o === "sale" ? it.sale : it.isNew))) return false;
+    }
+    return true;
+  };
+  const optionHit = (it, g, v) =>
+    g === "cat" ? it.cat === v : g === "stock" ? it.stock === v : g === "for" ? it.for === v :
+    g === "size" ? it.sizes.includes(v) : g === "color" ? it.colors.includes(v) :
+    g === "offer" ? (v === "sale" ? it.sale : it.isNew) : false;
+
+  const sorters = {
+    featured: (a, b) => a.i - b.i,
+    best: (a, b) => a.pop - b.pop,
+    new: (a, b) => b.date.localeCompare(a.date),
+    "price-asc": (a, b) => a.price - b.price || a.i - b.i,
+    "price-desc": (a, b) => b.price - a.price || a.i - b.i,
+    az: (a, b) => a.name.localeCompare(b.name),
+    za: (a, b) => b.name.localeCompare(a.name)
+  };
+
+  const activeCount = () => GROUPS.reduce((n, g) => n + state[g].size, 0) + (state.min > PMIN || state.max < PMAX ? 1 : 0) + (state.q ? 1 : 0);
+
+  /* ---- render ---- */
+  const paintPrice = () => {
+    rMin.value = state.min; rMax.value = state.max;
+    if (document.activeElement !== nMin) nMin.value = state.min;
+    if (document.activeElement !== nMax) nMax.value = state.max;
+    fill.style.left = (state.min / PMAX) * 100 + "%";
+    fill.style.right = (100 - (state.max / PMAX) * 100) + "%";
+  };
+
+  function apply({ resetPage = true, scroll = false } = {}) {
+    if (resetPage) state.shown = PER_PAGE;
+    const result = items.filter(it => matches(it)).sort(sorters[state.sort] || sorters.featured);
+    const set = new Set(result);
+
+    // order + visibility
+    items.forEach(it => { if (!set.has(it)) { it.el.hidden = true; } });
+    result.forEach((it, k) => {
+      grid.appendChild(it.el);
+      const show = k < state.shown;
+      const wasHidden = it.el.hidden;
+      it.el.hidden = !show;
+      if (show) { it.el.classList.add("in"); if (wasHidden) { it.el.classList.remove("pop-in"); void it.el.offsetWidth; it.el.style.animationDelay = `${(k % PER_PAGE) * 35}ms`; it.el.classList.add("pop-in"); } }
+    });
+
+    // promo tile: only on the untouched collection, after the 4th card
+    if (promoTile) {
+      const plain = !activeCount() && state.sort === "featured" && result.length > 4;
+      promoTile.hidden = !plain;
+      if (plain) grid.insertBefore(promoTile, result[4].el);
+    }
+
+    // counts per option (faceted: respects the other groups)
+    GROUPS.forEach(g => {
+      $$(`input[name="${g}"]`, form).forEach(inp => {
+        const n = items.filter(it => matches(it, g) && optionHit(it, g, inp.value)).length;
+        inp.checked = state[g].has(inp.value);
+        const lbl = $(`[data-n="${g}:${inp.value}"]`); if (lbl) lbl.textContent = n;
+        inp.closest("label").classList.toggle("is-zero", !n && !inp.checked);
+      });
+      const sel = $(`[data-sel="${g}"]`); if (sel) sel.textContent = state[g].size ? `(${state[g].size})` : "";
+    });
+    const pSel = $('[data-sel="price"]'); if (pSel) pSel.textContent = state.min > PMIN || state.max < PMAX ? `(GH₵ ${state.min}–${state.max})` : "";
+
+    // quick category pills
+    const pillBase = items.filter(it => matches(it, "cat"));
+    $$("[data-cat-pill]").forEach(b => {
+      const v = b.dataset.catPill;
+      b.classList.toggle("is-on", v ? state.cat.size === 1 && state.cat.has(v) : !state.cat.size);
+      const n = v ? pillBase.filter(it => it.cat === v).length : pillBase.length;
+      const lbl = $("span", b); if (lbl) lbl.textContent = n;
+    });
+
+    // totals + labels
+    $$("[data-result-n]").forEach(el => (el.textContent = result.length));
+    const word = $("[data-result-word]"); if (word) word.textContent = result.length === 1 ? "product" : "products";
+    const ac = activeCount();
+    const badge = $("[data-f-count]"); if (badge) { badge.textContent = ac; badge.hidden = !ac; }
+    const lblC = $("[data-f-count-lbl]"); if (lblC) lblC.textContent = ac ? `(${ac})` : "";
+    $$("[data-clear]").forEach(b => { if (b.closest(".filters__top")) b.hidden = !ac; });
+    $("[data-sort]").value = state.sort;
+    paintPrice();
+
+    // active filter chips
+    const chips = $("[data-chips]");
+    const chip = (label, onRemove) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "chip";
+      b.innerHTML = `<span></span><i class="bi bi-x"></i>`;
+      $("span", b).textContent = label;
+      b.setAttribute("aria-label", `Remove filter: ${label}`);
+      b.addEventListener("click", () => { onRemove(); apply(); });
+      chips.append(b);
+    };
+    chips.innerHTML = "";
+    if (state.q) chip(`Search: “${state.q}”`, () => (state.q = ""));
+    GROUPS.forEach(g => state[g].forEach(v => {
+      const inp = $(`input[name="${g}"][value="${v}"]`, form);
+      const text = LABELS[g]?.[v] || inp?.closest("label")?.querySelector(".fopt__label, .fcolor__name, span:not([class])")?.textContent || v;
+      chip(text, () => state[g].delete(v));
+    }));
+    if (state.min > PMIN || state.max < PMAX) chip(`GH₵ ${state.min} – ${state.max}`, () => { state.min = PMIN; state.max = PMAX; });
+    if (ac > 1) {
+      const c = document.createElement("button");
+      c.type = "button"; c.className = "chip chip--clear"; c.textContent = "Clear all";
+      c.addEventListener("click", clearAll);
+      chips.append(c);
+    }
+    chips.hidden = !ac;
+
+    // empty + load more
+    $("[data-shop-empty]").hidden = result.length > 0;
+    const shown = Math.min(state.shown, result.length);
+    const moreWrap = $("[data-more-wrap]");
+    moreWrap.hidden = !result.length;
+    $("[data-shown]").textContent = shown;
+    $("[data-total]").textContent = result.length;
+    $("[data-more-bar]").style.width = result.length ? (shown / result.length) * 100 + "%" : "0";
+    $("[data-more]").hidden = shown >= result.length;
+
+    writeURL();
+    if (scroll) $("#products").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function clearAll() {
+    GROUPS.forEach(g => state[g].clear());
+    state.min = PMIN; state.max = PMAX; state.q = "";
+    apply();
+  }
+
+  /* ---- events ---- */
+  form.addEventListener("change", e => {
+    const t = e.target;
+    if (t.type === "checkbox" && GROUPS.includes(t.name)) {
+      t.checked ? state[t.name].add(t.value) : state[t.name].delete(t.value);
+      apply();
+    }
+  });
+
+  // price: slider + number boxes
+  let pTimer;
+  const setPrice = (lo, hi, src) => {
+    lo = Math.max(PMIN, Math.min(+lo || 0, PMAX));
+    hi = Math.max(PMIN, Math.min(+hi || 0, PMAX));
+    if (lo > hi) src === "min" ? (lo = hi) : (hi = lo);
+    state.min = lo; state.max = hi;
+    paintPrice();
+    clearTimeout(pTimer);
+    pTimer = setTimeout(() => apply(), 220);
+  };
+  rMin.addEventListener("input", () => setPrice(rMin.value, state.max, "min"));
+  rMax.addEventListener("input", () => setPrice(state.min, rMax.value, "max"));
+  nMin.addEventListener("change", () => setPrice(nMin.value, state.max, "min"));
+  nMax.addEventListener("change", () => setPrice(state.min, nMax.value, "max"));
+
+  $$("[data-clear]").forEach(b => b.addEventListener("click", clearAll));
+  $("[data-sort]").addEventListener("change", e => { state.sort = e.target.value; apply(); });
+  $("[data-more]").addEventListener("click", () => { state.shown += PER_PAGE; apply({ resetPage: false }); });
+
+  $$("[data-cat-pill]").forEach(b => b.addEventListener("click", () => {
+    const v = b.dataset.catPill;
+    state.cat = new Set(v ? [v] : []);
+    apply();
+  }));
+
+  // grid density
+  const setCols = n => {
+    grid.dataset.cols = n;
+    $$("[data-cols]").forEach(b => b.classList.toggle("is-on", b.dataset.cols === String(n)));
+    try { localStorage.setItem("ts_cols", n); } catch { /* ignore */ }
+  };
+  $$("[data-cols]").forEach(b => b.addEventListener("click", () => setCols(b.dataset.cols)));
+  try { const c = localStorage.getItem("ts_cols"); if (c) setCols(c); } catch { /* ignore */ }
+
+  // keep the search box in sync with ?q=
+  readURL();
+  const q = $("#q"); if (q && state.q) q.value = state.q;
+  apply({ resetPage: true });
+  addEventListener("popstate", () => { readURL(); apply(); });
+})();
