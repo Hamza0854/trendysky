@@ -240,6 +240,8 @@
     }
   };
   paintBag();
+  // other page scripts (product page, cart page) announce bag changes
+  document.addEventListener("bag:change", () => { bag = store.get("ts_bag", []); paintBag(); });
 
   /* ---------- quick add bottom sheet (size picker) ---------- */
   const qaEl = $("#quick");
@@ -1133,4 +1135,231 @@
   const q = $("#q"); if (q && state.q) q.value = state.q;
   apply({ resetPage: true });
   addEventListener("popstate", () => { readURL(); apply(); });
+})();
+
+
+
+/* =====================================================================
+   TRENDY SKY — Product details page (product.html)
+   Gallery (swipe / thumbs / hover zoom / full screen), size + quantity,
+   add to bag, buy now, WhatsApp order, sticky add bar, size guide units.
+   ===================================================================== */
+(() => {
+  "use strict";
+  const page = document.querySelector("[data-product]");
+  if (!page) return;
+
+  const $ = (s, c = document) => c.querySelector(s);
+  const $$ = (s, c = document) => [...c.querySelectorAll(s)];
+  const money = n => "GH₵ " + Number(n).toLocaleString("en-GH");
+  const get = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
+  const set = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage blocked */ } };
+  const toastEl = $("[data-toast]");
+  let tT;
+  const toast = msg => { if (!toastEl) return; toastEl.textContent = msg; toastEl.classList.add("on"); clearTimeout(tT); tT = setTimeout(() => toastEl.classList.remove("on"), 2600); };
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ================= GALLERY ================= */
+  const gal = $("[data-gallery]");
+  const track = $("[data-gal-track]", gal);
+  const slides = $$(".gal__slide", track);
+  const thumbs = $$(".gal__thumb", gal);
+  const dots = $$(".gal__dots span", gal);
+  const counter = $("[data-gal-i]", gal);
+  let cur = 0;
+
+  const paint = i => {
+    cur = i;
+    thumbs.forEach((t, k) => { t.classList.toggle("is-on", k === i); t.setAttribute("aria-selected", k === i); });
+    dots.forEach((d, k) => d.classList.toggle("is-on", k === i));
+    if (counter) counter.textContent = i + 1;
+  };
+  const go = i => {
+    i = (i + slides.length) % slides.length;
+    track.scrollTo({ left: slides[i].offsetLeft, behavior: reduce ? "auto" : "smooth" });
+    paint(i);
+  };
+  thumbs.forEach(t => t.addEventListener("click", () => go(+t.dataset.go)));
+  $("[data-gal-prev]", gal).addEventListener("click", () => go(cur - 1));
+  $("[data-gal-next]", gal).addEventListener("click", () => go(cur + 1));
+  let sT;
+  track.addEventListener("scroll", () => {
+    clearTimeout(sT);
+    sT = setTimeout(() => paint(Math.round(track.scrollLeft / track.clientWidth)), 60);
+  }, { passive: true });
+  gal.addEventListener("keydown", e => {
+    if (e.key === "ArrowRight") go(cur + 1);
+    if (e.key === "ArrowLeft") go(cur - 1);
+  });
+
+  // hover zoom (mouse only)
+  if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
+    slides.forEach(sl => {
+      const img = $("img", sl);
+      sl.addEventListener("mousemove", e => {
+        const r = sl.getBoundingClientRect();
+        img.style.transformOrigin = `${((e.clientX - r.left) / r.width) * 100}% ${((e.clientY - r.top) / r.height) * 100}%`;
+        sl.classList.add("is-zoom");
+      });
+      sl.addEventListener("mouseleave", () => sl.classList.remove("is-zoom"));
+    });
+  }
+
+  // full screen lightbox
+  const lb = $("[data-lightbox]");
+  const lbImg = $("[data-lb-img]", lb), lbI = $("[data-lb-i]", lb);
+  let lbAt = 0, lastFocus = null;
+  const lbShow = i => {
+    lbAt = (i + slides.length) % slides.length;
+    const src = $("img", slides[lbAt]);
+    lbImg.src = src.currentSrc || src.src;
+    lbImg.alt = src.alt;
+    lbImg.className = src.className;
+    lbI.textContent = lbAt + 1;
+  };
+  const lbOpen = i => {
+    lastFocus = document.activeElement;
+    lbShow(i); lb.hidden = false;
+    requestAnimationFrame(() => lb.classList.add("is-open"));
+    document.body.style.overflow = "hidden";
+    $("[data-lightbox-close]", lb).focus();
+  };
+  const lbClose = () => {
+    lb.classList.remove("is-open");
+    setTimeout(() => { lb.hidden = true; }, 300);
+    document.body.style.overflow = "";
+    lastFocus?.focus();
+  };
+  $("[data-lightbox-open]", gal).addEventListener("click", () => lbOpen(cur));
+  slides.forEach((sl, i) => sl.addEventListener("click", () => lbOpen(i)));
+  $("[data-lightbox-close]", lb).addEventListener("click", lbClose);
+  $("[data-lb-prev]", lb).addEventListener("click", () => lbShow(lbAt - 1));
+  $("[data-lb-next]", lb).addEventListener("click", () => lbShow(lbAt + 1));
+  lb.addEventListener("click", e => { if (e.target === lb) lbClose(); });
+  addEventListener("keydown", e => {
+    if (lb.hidden) return;
+    if (e.key === "Escape") lbClose();
+    if (e.key === "ArrowRight") lbShow(lbAt + 1);
+    if (e.key === "ArrowLeft") lbShow(lbAt - 1);
+  });
+  let lx = 0;
+  lb.addEventListener("touchstart", e => (lx = e.touches[0].clientX), { passive: true });
+  lb.addEventListener("touchend", e => { const dx = e.changedTouches[0].clientX - lx; if (Math.abs(dx) > 50) lbShow(lbAt + (dx < 0 ? 1 : -1)); }, { passive: true });
+
+  /* ================= BUY BOX ================= */
+  const form = $("[data-buy-form]");
+  const P = { name: form.dataset.name, price: +form.dataset.price, img: form.dataset.img, sku: form.dataset.sku };
+  const qtyIn = $("[data-qty-input]", form);
+  const sizeVal = $("[data-size-val]"), stockMsg = $("[data-stock-msg]"), sizeErr = $("[data-size-err]");
+  const stickySize = $("[data-sticky-size]");
+  const addTotal = $("[data-add-total]");
+  const waBtn = $("[data-wa-order]");
+
+  const size = () => $('input[name="size"]:checked', form)?.value || "";
+  const qty = () => Math.min(10, Math.max(1, parseInt(qtyIn.value, 10) || 1));
+
+  const sync = () => {
+    const s = size(), q = qty();
+    qtyIn.value = q;
+    sizeVal.textContent = s || "Select a size";
+    if (stickySize) stickySize.textContent = s ? `Size ${s}` : "Select a size";
+    addTotal.textContent = money(P.price * q);
+    const low = s && $(`input[value="${s}"]`, form).closest("label").dataset.low;
+    stockMsg.innerHTML = low ? `<i class="bi bi-lightning-charge-fill"></i> Only ${low} left in ${s} — order soon` : "";
+    $$('[data-q="-1"]', form).forEach(b => (b.disabled = q <= 1));
+    $$('[data-q="1"]', form).forEach(b => (b.disabled = q >= 10));
+    const msg = `Hello Trendy Sky, I'd like to order:\n${P.name}${s ? " — size " + s : ""} × ${q} (${money(P.price * q)})\n${location.href}`;
+    waBtn.href = "https://wa.me/233546656727?text=" + encodeURIComponent(msg);
+  };
+  form.addEventListener("change", e => {
+    if (e.target.name === "size") { sizeErr.textContent = ""; $("[data-sizes]").classList.remove("is-invalid"); }
+    sync();
+  });
+  $$("[data-q]", form).forEach(b => b.addEventListener("click", () => { qtyIn.value = qty() + +b.dataset.q; sync(); }));
+  qtyIn.addEventListener("change", sync);
+
+  const needSize = () => {
+    if (size()) return true;
+    sizeErr.textContent = "Please choose a size first.";
+    const box = $("[data-sizes]");
+    box.classList.add("is-invalid");
+    box.classList.remove("shake"); void box.offsetWidth; box.classList.add("shake");
+    box.closest(".opt").scrollIntoView({ behavior: "smooth", block: "center" });
+    $('input[name="size"]:not(:disabled)', form)?.focus({ preventScroll: true });
+    return false;
+  };
+  const addToBag = () => {
+    const bag = get("ts_bag", []);
+    const s = size(), q = qty();
+    const hit = bag.find(i => i.name === P.name && i.size === s);
+    hit ? (hit.qty = Math.min(10, hit.qty + q)) : bag.push({ name: P.name, price: P.price, img: P.img, size: s, qty: q });
+    set("ts_bag", bag);
+    document.dispatchEvent(new CustomEvent("bag:change"));
+    const c = $("[data-cart-count]");
+    if (c) { c.classList.remove("pop"); void c.offsetWidth; c.classList.add("pop"); }
+  };
+
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    if (!needSize()) return;
+    addToBag();
+    const btn = $("[data-add-btn]");
+    btn.classList.add("is-added");
+    $("span", btn).innerHTML = `<i class="bi bi-check2"></i> Added to bag`;
+    setTimeout(() => { btn.classList.remove("is-added"); $("span", btn).innerHTML = `Add to bag · <b data-add-total>${money(P.price * qty())}</b>`; }, 1800);
+    if (window.bootstrap && $("#cart")) bootstrap.Offcanvas.getOrCreateInstance("#cart").show();
+    else toast(`${P.name} (${size()}) added to your bag`);
+  });
+  $("[data-buy-now]").addEventListener("click", () => {
+    if (!needSize()) return;
+    addToBag();
+    location.href = "checkout.html";
+  });
+  $("[data-sticky-add]")?.addEventListener("click", () => {
+    if (!size()) { needSize(); return; }
+    form.requestSubmit();
+  });
+
+  // wishlist (same list as the product cards)
+  const wishBtn = $("[data-pdp-wish]");
+  const paintWish = () => {
+    const on = get("ts_wish", []).includes(P.name);
+    wishBtn.classList.toggle("is-on", on);
+    wishBtn.setAttribute("aria-pressed", on);
+    const wc = $("[data-wish-count]"); if (wc) { const n = get("ts_wish", []).length; wc.textContent = n; wc.hidden = !n; }
+  };
+  wishBtn.addEventListener("click", () => {
+    let w = get("ts_wish", []);
+    const on = !w.includes(P.name);
+    w = on ? [...w, P.name] : w.filter(n => n !== P.name);
+    set("ts_wish", w); paintWish();
+    toast(on ? `Saved ${P.name}` : `Removed ${P.name}`);
+  });
+
+  // copy link
+  $("[data-copy-link]")?.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(location.href); toast("Link copied"); } catch { toast(location.href); }
+  });
+
+  /* ================= STICKY BAR ================= */
+  const sticky = $("[data-sticky-buy]");
+  const addBtn = $("[data-add-btn]");
+  if (sticky && "IntersectionObserver" in window) {
+    new IntersectionObserver(([e]) => {
+      const show = !e.isIntersecting && e.boundingClientRect.top < 0;
+      sticky.classList.toggle("is-on", show);
+      sticky.setAttribute("aria-hidden", !show);
+      $("[data-sticky-add]").tabIndex = show ? 0 : -1;
+      document.body.classList.toggle("has-sticky-buy", show);
+    }).observe(addBtn);
+  }
+
+  /* ================= SIZE GUIDE UNITS ================= */
+  $$("[data-unit]").forEach(b => b.addEventListener("click", () => {
+    $$("[data-unit]").forEach(x => x.classList.toggle("is-on", x === b));
+    const inch = b.dataset.unit === "in";
+    $$("[data-sg-table] td[data-cm]").forEach(td => { const cm = +td.dataset.cm; td.textContent = inch ? (cm / 2.54).toFixed(1) : cm; });
+  }));
+
+  sync(); paintWish(); paint(0);
 })();
